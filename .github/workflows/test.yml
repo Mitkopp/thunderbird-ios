@@ -1,24 +1,42 @@
-# Run tests and analyze builds
-
 name: Xcode Build
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
+  workflow_dispatch:
 
 jobs:
   test:
-    runs-on: macos-26
+    runs-on: macos-latest
     env:
       DEVICE: "iPhone 17"
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Install signing assets
+        env:
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo "$IOS_CERTIFICATE_BASE64" | base64 --decode > cert.p12
+          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > profile.mobileprovision
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import cert.p12 -k build.keychain -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" build.keychain
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
 
       - name: Resolve package dependencies
         run: |
@@ -34,36 +52,13 @@ jobs:
             -sdk iphonesimulator \
             -destination "platform=iOS Simulator,name=${DEVICE}"
 
-      - name: List available simulators
-        run: xcrun simctl list devices
-
-      - name: Boot simulator
-        uses: nick-invision/retry@v3
-        with:
-          timeout_minutes: 5
-          max_attempts: 5
-          retry_wait_seconds: 15
-          command: |
-            set -x
-            echo "Booting ${DEVICE} simulator..."
-            xcrun simctl shutdown "${DEVICE}" || true
-            xcrun simctl boot "${DEVICE}" || true
-            xcrun simctl bootstatus "${DEVICE}" -b
-            echo "Simulator booted and ready."
-
       - name: Run tests
-        uses: nick-invision/retry@v3
-        with:
-          timeout_minutes: 15
-          max_attempts: 3
-          retry_wait_seconds: 15
-          command: |
-            echo "Running tests in ${DEVICE} simulator..."
-            xcodebuild test \
-              -workspace Thunderbird.xcworkspace \
-              -scheme ThunderbirdTests \
-              -sdk iphonesimulator \
-              -destination "platform=iOS Simulator,name=${DEVICE}"
+        run: |
+          xcodebuild test \
+            -workspace Thunderbird.xcworkspace \
+            -scheme ThunderbirdTests \
+            -sdk iphonesimulator \
+            -destination "platform=iOS Simulator,name=${DEVICE}"
 
       - name: Archive (Release, signed)
         run: |
@@ -75,3 +70,33 @@ jobs:
             -destination 'generic/platform=iOS' \
             DEVELOPMENT_TEAM=${{ secrets.TEAM_ID }} \
             CODE_SIGN_STYLE=Manual
+
+      - name: Create ExportOptions.plist
+        run: |
+          cat <<EOF > ExportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>development</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>${{ secrets.TEAM_ID }}</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Export IPA
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/Thunderbird.xcarchive \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath build
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Thunderbird-ipa
+          path: build/*.ipa
