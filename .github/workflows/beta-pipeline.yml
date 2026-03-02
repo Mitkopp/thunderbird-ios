@@ -1,4 +1,4 @@
-name: Build Unsigned IPA
+name: Build IPA Minimal
 
 on:
   workflow_dispatch:
@@ -7,20 +7,13 @@ on:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: List available Xcode versions
-        run: ls /Applications | grep Xcode
-
-      - name: Select newest Xcode
-        run: |
-          sudo xcode-select -s /Applications/Xcode.app
-          xcodebuild -version
-          swift --version
+        with:
+          fetch-depth: 0
 
       - name: Resolve package dependencies
         run: |
@@ -28,14 +21,14 @@ jobs:
             -workspace Thunderbird.xcworkspace \
             -scheme Thunderbird
 
-      - name: Archive (unsigned)
+      - name: Archive (Release, unsigned)
         run: |
           xcodebuild clean archive \
             -workspace Thunderbird.xcworkspace \
             -scheme Thunderbird \
             -configuration Release \
-            -archivePath build/Thunderbird.xcarchive \
             -destination 'generic/platform=iOS' \
+            -archivePath build/Thunderbird.xcarchive \
             CODE_SIGNING_ALLOWED=NO
 
       - name: Create ExportOptions.plist
@@ -47,8 +40,6 @@ jobs:
           <dict>
             <key>method</key>
             <string>development</string>
-            <key>signingStyle</key>
-            <string>manual</string>
           </dict>
           </plist>
           EOF
@@ -61,8 +52,8 @@ jobs:
             -exportPath build \
             CODE_SIGNING_ALLOWED=NO
 
-      - name: Upload IPA
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Thunderbird-unsigned-ipa
+          name: Thunderbird-ipa
           path: build/*.ipa
