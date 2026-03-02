@@ -10,30 +10,50 @@ jobs:
     runs-on: macos-26
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Install signing assets
+      - name: Install signing assets (diagnostic)
         env:
           IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
           IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
           IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
+          set -e
+
           echo "$IOS_CERTIFICATE_BASE64" | base64 -d > cert.p12
           echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -d > profile.mobileprovision
 
+          echo "=== Certificate file info ==="
+          ls -lh cert.p12
+          shasum cert.p12
+
+          echo "=== OpenSSL validation ==="
+          openssl pkcs12 -in cert.p12 -info -noout -passin pass:${IOS_CERTIFICATE_PASSWORD}
+
+          echo "=== Creating keychain ==="
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-          security import cert.p12 -k build.keychain -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" build.keychai  - name: Verify certificate fil
-          ls -lh cert.p12
-          shasum cert.p12
+
+          echo "=== Importing certificate ==="
+          security import cert.p12 \
+            -k build.keychain \
+            -P "$IOS_CERTIFICATE_PASSWORD" \
+            -A
+
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" \
+            build.keychain
+
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
 
-      - name: Resolve packages
+      - name: Resolve package dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -workspace Thunderbird.xcworkspace \
