@@ -7,13 +7,22 @@ on:
 
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve packages
+      - name: List available Xcode versions
+        run: ls /Applications | grep Xcode
+
+      - name: Select newest Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+          swift --version
+
+      - name: Resolve package dependencies
         run: |
           xcodebuild -resolvePackageDependencies \
             -workspace Thunderbird.xcworkspace \
@@ -29,7 +38,7 @@ jobs:
             -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO
 
-      - name: Export unsigned IPA
+      - name: Create ExportOptions.plist
         run: |
           cat <<EOF > ExportOptions.plist
           <?xml version="1.0" encoding="UTF-8"?>
@@ -44,6 +53,8 @@ jobs:
           </plist>
           EOF
 
+      - name: Export IPA (unsigned)
+        run: |
           xcodebuild -exportArchive \
             -archivePath build/Thunderbird.xcarchive \
             -exportOptionsPlist ExportOptions.plist \
