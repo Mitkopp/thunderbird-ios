@@ -1,4 +1,60 @@
-name: Build IPA Only
+name: Build Unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -workspace Thunderbird.xcworkspace \
+            -scheme Thunderbird
+
+      - name: Archive (unsigned)
+        run: |
+          xcodebuild clean archive \
+            -workspace Thunderbird.xcworkspace \
+            -scheme Thunderbird \
+            -configuration Release \
+            -archivePath build/Thunderbird.xcarchive \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Export unsigned IPA
+        run: |
+          cat <<EOF > ExportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>development</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+          </dict>
+          </plist>
+          EOF
+
+          xcodebuild -exportArchive \
+            -archivePath build/Thunderbird.xcarchive \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath build \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Thunderbird-unsigned-ipa
+          path: build/*.ipaname: Build IPA Only
 
 on:
   workflow_dispatch:
