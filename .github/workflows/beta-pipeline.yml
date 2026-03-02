@@ -1,4 +1,4 @@
-name: Build IPA Minimal
+name: Build Signed IPA
 
 on:
   workflow_dispatch:
@@ -10,26 +10,44 @@ jobs:
     runs-on: macos-26
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Resolve package dependencies
+      - name: Install signing assets
+        env:
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          echo "$IOS_CERTIFICATE_BASE64" | base64 --decode > cert.p12
+          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > profile.mobileprovision
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security import cert.p12 -k build.keychain -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" build.keychain
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Resolve packages
         run: |
           xcodebuild -resolvePackageDependencies \
             -workspace Thunderbird.xcworkspace \
             -scheme Thunderbird
 
-      - name: Archive (Release, unsigned)
+      - name: Archive (signed)
         run: |
           xcodebuild clean archive \
             -workspace Thunderbird.xcworkspace \
             -scheme Thunderbird \
             -configuration Release \
-            -destination 'generic/platform=iOS' \
             -archivePath build/Thunderbird.xcarchive \
-            CODE_SIGNING_ALLOWED=NO
+            -destination 'generic/platform=iOS' \
+            DEVELOPMENT_TEAM=${{ secrets.TEAM_ID }} \
+            CODE_SIGN_STYLE=Manual
 
       - name: Create ExportOptions.plist
         run: |
@@ -40,19 +58,22 @@ jobs:
           <dict>
             <key>method</key>
             <string>development</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>${{ secrets.TEAM_ID }}</string>
           </dict>
           </plist>
           EOF
 
-      - name: Export IPA (unsigned)
+      - name: Export IPA
         run: |
           xcodebuild -exportArchive \
             -archivePath build/Thunderbird.xcarchive \
             -exportOptionsPlist ExportOptions.plist \
-            -exportPath build \
-            CODE_SIGNING_ALLOWED=NO
+            -exportPath build
 
-      - name: Upload IPA artifact
+      - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: Thunderbird-ipa
