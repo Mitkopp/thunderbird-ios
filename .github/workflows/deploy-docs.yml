@@ -51,12 +51,12 @@ jobs:
             -workspace Thunderbird.xcworkspace \
             -scheme Thunderbird
 
-      - name: Archive (signed, Debug)
+      - name: Archive (signed, Release)
         run: |
           xcodebuild archive \
             -workspace Thunderbird.xcworkspace \
             -scheme Thunderbird \
-            -configuration Debug \
+            -configuration Release \
             -archivePath build/Thunderbird.xcarchive \
             -destination 'generic/platform=iOS' \
             DEVELOPMENT_TEAM=${{ secrets.TEAM_ID }} \
@@ -74,7 +74,7 @@ jobs:
           <plist version="1.0">
           <dict>
             <key>method</key>
-            <string>debugging</string>
+            <string>ad-hoc</string>
             <key>signingStyle</key>
             <string>manual</string>
             <key>teamID</key>
