@@ -1,66 +1,97 @@
-name: Deploy docs
+name: Build Signed IPA
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'docs/**'
-
   workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  push:
+    branches: ["main"]
 
 jobs:
-  build-docs:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: macos-26
+    timeout-minutes: 90
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          path: |
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.toml
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          fetch-depth: 0
 
-      - name: Install mdbook and extensions
-        run: ./docs/install.sh
+      - name: Install signing assets
+        env:
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -e
 
-      - name: Setup Pages
-        id: pages
-        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+          echo "$IOS_CERTIFICATE_BASE64" | base64 -d > cert.p12
+          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 -d > profile.mobileprovision
 
-      - name: Build docs
-        run: mdbook build docs --dest-dir=book/docs/latest
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
 
-      - name: Test docs
-        run: mdbook test docs
+          security import cert.p12 \
+            -k build.keychain \
+            -P "$IOS_CERTIFICATE_PASSWORD" \
+            -A
 
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" \
+            build.keychain
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Resolve package dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -workspace Thunderbird.xcworkspace \
+            -scheme Thunderbird
+
+      - name: Archive (signed, fast)
+        run: |
+          xcodebuild archive \
+            -workspace Thunderbird.xcworkspace \
+            -scheme Thunderbird \
+            -configuration Debug \
+            -archivePath build/Thunderbird.xcarchive \
+            -destination 'generic/platform=iOS' \
+            DEVELOPMENT_TEAM=${{ secrets.TEAM_ID }} \
+            CODE_SIGN_STYLE=Manual \
+            PROVISIONING_PROFILE=b2553429-fe3a-4935-bd19-45e3ba0d8e47 \
+            PRODUCT_BUNDLE_IDENTIFIER=app.emerald4137.panther5681 \
+            -parallelizeTargets \
+            -jobs 4
+
+      - name: Create ExportOptions.plist
+        run: |
+          cat <<EOF > ExportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>development</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>teamID</key>
+            <string>${{ secrets.TEAM_ID }}</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Export IPA
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/Thunderbird.xcarchive \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath build
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
         with:
-          path: ./book/docs
-
-  deploy-docs:
-    environment:
-      name: pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build-docs
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+          name: Thunderbird-ipa
+          path: build/*.ipa
